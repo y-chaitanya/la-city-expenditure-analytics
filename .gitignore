@@ -1,0 +1,19 @@
+# Ignore local SQLite database files and journals
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+
+# Ignore large raw CSV data files
+*.csv
+
+# Ignore OS-generated hidden system files
+.DS_Store
+Thumbs.db
+
+# Ignore Python / virtual environment temporary files (for future dashboard work)
+__pycache__/
+*.pyc
+.venv/
+env/
