@@ -59,7 +59,7 @@ ORDER BY payment_count DESC;
 
 * **Visual Evidence:**
 
-![Test 1 Query Results](./assets/01_duplicate_results.jpg)
+![Test 1 Query Results](./assets/01_duplicate_results.png)
 
 
 ### 2. High-Value Materiality Filtering (`02_high_value_anomaly_test.sql`)
@@ -79,7 +79,7 @@ ORDER BY total_exposure_amount DESC;
 
 * **Visual Evidence:**
 
-![Test 2 Query Results](./assets/02_high_value_results.jpg)
+![Test 2 Query Results](./assets/02_high_value_results.png)
 
 
 ### 3. Anti-Structuring Split Purchase Scanner (`03_sub_materiality_structuring_test.sql`)
@@ -98,7 +98,7 @@ ORDER BY payment_count DESC;
 
 * **Visual Evidence:**
 
-![Test 3 Query Results](./assets/03_structuring_results.jpg)
+![Test 3 Query Results](./assets/03_structuring_results.png)
 
 
 ### 4. Substantive Ledger Drill-Down Case Studies (`04_substantive_drill_down.sql`)
@@ -107,19 +107,19 @@ ORDER BY payment_count DESC;
 * **Initial Flag:** Test 1 caught $6.72 repeating 693 times on 10/02/2025 ($4,656.96 total exposure).
 * **Audit Resolution:** Querying `TRANSACTION ID` and device serial numbers revealed unique sequential IDs (`EFT2626...`). This proves an automated ERP system routine splitting a centralized master invoice across individual departmental printers rather than an overpayment error.
 
-![Konica Minolta Evidence](./assets/04_drilldown_konica.jpg)
+![Konica Minolta Evidence](./assets/04_drilldown_konica.png)
 
 #### Case Study B: Wells Fargo Municipal Debt Service Analysis
 * **Initial Flag:** Test 2 caught $9,000,000.00 repeating 49 times on 05/01/2026 ($441,000,000 total exposure).
 * **Audit Resolution:** Querying `FUND NAME`, `ACCOUNT NAME`, and `INV NUM` showed payments assigned to Water/Power Revenue funds matching sequential bond tranche redemptions (`RFP42326J`, `L`, `M`...). This confirms authorized bond principal and interest payouts executed through trustee accounts.
 
-![Wells Fargo Evidence](./assets/04_drilldown_wellsfargo.jpg)
+![Wells Fargo Evidence](./assets/04_drilldown_wellsfargo.png)
 
 #### Case Study C: United Site Services Contract Analysis
 * **Initial Flag:** Test 3 caught $4,960.00 repeating 15 times on 10/30/2025 ($74,400 total exposure).
 * **Audit Resolution:** Querying `PO NUM` and `DETAILED ITEM DESCRIPTION` revealed a shared Master Contract Purchase Order (`CPO74260000423827`) for Mayoral Special Projects. The individual line items represented distinct weekly route servicing locations, clearing suspicion of intentional P-Card limit structuring.
 
-![United Site Services Evidence](./assets/04_drilldown_results.jpg)
+![United Site Services Evidence](./assets/04_drilldown_results.png)
 
 ---
 
