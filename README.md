@@ -2,7 +2,7 @@
 **Forensic Data Analytics & Internal Control Review using SQLite**
 
 ## Executive Summary
-When analyzing public financial datasets, high-dollar figures and recurring line items can easily trigger false alarms without accounting context. In this project, I performed an end-to-end audit of the [City of Los Angeles Checkbook dataset](https://lacity.org) (747,363 expenditure records) using SQLite to evaluate internal payment controls, detect potential split-purchasing, and investigate high-dollar ledger anomalies.
+When analyzing public financial datasets, high-dollar figures and recurring line items can easily trigger false alarms without accounting context. In this project, I performed an end-to-end audit of the [City of Los Angeles Checkbook dataset](https://data.lacity.org/) (747,363 expenditure records) using SQLite to evaluate internal payment controls, detect potential split-purchasing, and investigate high-dollar ledger anomalies.
 
 By pairing automated SQL exception scripts with substantive ledger drill-downs, I separated operational system noise and municipal debt service from genuine internal control risks.
 
@@ -136,7 +136,7 @@ ORDER BY payment_count DESC;
 
 ### Prerequisites
 * SQLite3 installed locally or a visual editor like **DB Browser for SQLite**.
-* Raw source downloaded from the [Official L.A. Checkbook Catalog Page](https://lacity.org) and loaded as table `Checkbook_LA`.
+* Raw source downloaded from the [Official L.A. Checkbook Catalog Page](https://data.lacity.org/) and loaded as table `Checkbook_LA`.
 
 ### Execution
 Execute the SQL scripts in numerical order inside your shell environment:
