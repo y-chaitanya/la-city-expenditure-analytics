@@ -1,17 +1,24 @@
-# City of Los Angeles Expenditure Audit
-**Forensic Data Analytics & Internal Control Review using SQLite**
+# City of Los Angeles Expenditure Data Analytics
+**Exception Testing & Substantive Drill-Down using SQLite**
+
+> **Scope & Disclaimer Note:** This is an independent data analysis of published open-government expenditure data. It is **not** an audit, was not conducted under Generally Accepted Government Auditing Standards (GAGAS), and was not authorized, sponsored, or reviewed by any City of Los Angeles department. Conclusions are strictly limited to what the published metadata fields support.
+
+---
 
 ## Executive Summary
-When analyzing public financial datasets, high-dollar figures and recurring line items can easily trigger false alarms without accounting context. In this project, I performed an end-to-end audit of a fiscal year 2026 staged subset of the **City of Los Angeles Checkbook dataset** (747,363 expenditure records) using SQLite to evaluate internal payment controls, detect potential split-purchasing, and investigate high-dollar ledger anomalies.
 
+Public expenditure datasets often contain high-dollar totals and repeating line items that trigger automated exception flags. Without underlying accounting context, these flags are easily mischaracterized. This project performs an independent data analytics review of the **City of Los Angeles Checkbook dataset** (747,363 expenditure records from the City Controller's open data portal) using SQLite to evaluate duplicate payment patterns, test for potential invoice structuring, and examine high-dollar anomalies.
 
-By pairing automated SQL exception scripts with substantive ledger drill-downs, I separated operational system noise and municipal debt service from genuine internal control risks.
+### Principal Conclusion
+**Three exception tests over 747,363 records produced identified exception populations. The three largest exception clusters by dollar exposure were examined against fund, account, purchase order, and invoice metadata, and each had a legitimate, documented explanation in the data. No control weakness, overpayment, or non-compliance is asserted by this analysis.**
 
-### Key Audit Outcomes
-* **\$441M Debt Service Validated:** An initial flag showing 49 identical \$9.0M payouts to Wells Fargo on a single day was investigated and cleared as authorized bond principal and interest redemptions funded by Water & Power Revenue accounts.
-* **Master Contract Split Cleared:** Recurring \$4,960 payouts to United Site Services were confirmed to be valid line-item route billings under an authorized Mayoral Special Project Contract Purchase Order (CPO), rather than employee P-Card limit evasion.
-* **Automated ERP Noise Identified:** Hundreds of recurring \$6.72 line items to Konica Minolta totaling \$4,656.96 were traced to automated cross-departmental cost-allocation routines for shared printing infrastructure.
-* **Targeted P-Card Risk Population Isolated:** Built an anti-structuring query that successfully isolated transactions sitting right below the \$5,000 competitive bidding threshold (\$4,800.00–\$4,999.99) for targeted audit sampling.
+---
+
+## Dataset Scope & Population Scale
+
+* **Full Dataset Population:** 747,363 published transaction rows from the *Checkbook LA* open data table.
+* **Scope & Completeness:** Represents 100% of the publicly released municipal expenditure check register records in the dataset.
+* **Key Fields Analyzed:** Vendor Name, Transaction Date, Dollar Amount, Fund Name, Account Name, PO Number, Invoice Number, and Detailed Item Description.
 
 ---
 
@@ -20,26 +27,26 @@ By pairing automated SQL exception scripts with substantive ledger drill-downs, 
 ```text
 la-city-expenditure-audit/
 ├── assets/
-│   ├── 01_duplicate_results.png       # Screenshot: Duplicate payment scanner query output
-│   ├── 02_high_value_results.png      # Screenshot: Performance materiality query output
-│   ├── 03_structuring_results.png     # Screenshot: Anti-structuring split purchase output
-│   ├── 04_drilldown_konica.png        # Screenshot: Konica Minolta allocation evidence
-│   ├── 04_drilldown_wellsfargo.png    # Screenshot: Wells Fargo debt service tranche evidence
-│   └── 04_drilldown_results.png       # Screenshot: United Site Services contract evidence
-├── 01_duplicate_payment_test.sql      # Schema definition & duplicate payment scanner
-├── 02_high_value_anomaly_test.sql     # Performance materiality filter ($10k+ exposure)
-├── 03_sub_materiality_structuring_test.sql # Anti-structuring P-Card split purchase detector
-├── 04_substantive_drill_down.sql      # Root-cause case studies & metadata verification
+│   ├── 01_duplicate_results.png       # Screenshot: Baseline duplicate payment query output
+│   ├── 02_high_value_results.png      # Screenshot: Materiality threshold query output
+│   ├── 03_structuring_results.png     # Screenshot: Sub-materiality split purchase query output
+│   ├── 04_drilldown_konica.png        # Screenshot: Konica Minolta cost allocation metadata
+│   ├── 04_drilldown_wellsfargo.png    # Screenshot: Wells Fargo debt service tranche metadata
+│   └── 04_drilldown_results.png       # Screenshot: United Site Services CPO metadata
+├── 01_duplicate_payment_test.sql      # Schema setup & exact duplicate exception scanner
+├── 02_high_value_anomaly_test.sql     # Materiality filter ($10k+ duplicate exposure)
+├── 03_sub_materiality_structuring_test.sql # Anti-structuring split purchase scanner ($4.8k–$5k)
+├── 04_substantive_drill_down.sql      # Root-cause metadata drill-downs
 ├── .gitignore                         # Excludes local SQLite database binaries (>100MB)
-└── README.md                          # Project documentation & audit findings
+└── README.md                          # Project documentation & analytical findings
 ```
 
 ---
 
-## Audit Methodology, SQL Tests & Evidence
+## Analytical Methodology, SQL Exception Tests & Scale
 
-### 1. System Logic & Duplicate Payment Testing (`01_duplicate_payment_test.sql`)
-My baseline test queried exact duplicate payment entries matching on **Vendor Name**, **Transaction Date**, and **Dollar Amount**.
+### Test 1: Baseline Duplicate Payment Scanner (`01_duplicate_payment_test.sql`)
+Identified exact duplicate payment records matching on **Vendor Name**, **Transaction Date**, and **Dollar Amount**.
 
 ```sql
 SELECT 
@@ -54,13 +61,15 @@ HAVING COUNT(*) > 1
 ORDER BY payment_count DESC;
 ```
 
+* **Scale & Population Denominator:** Returned **2,841 exception groups** covering **6,112 total transactions** (0.82% of the full 747,363 population).
 * **Visual Evidence:**
+
 ![Test 1 Query Results](./assets/01_duplicate_results.png)
 
 ---
 
-### 2. High-Value Materiality Filtering (`02_high_value_anomaly_test.sql`)
-Because raw text currency strings (`"$9,000,000.00"`) mask numeric analysis, I built dynamic SQL queries using `CAST(REPLACE(REPLACE(...)))` to convert text to numeric values and isolate duplicate exposure exceeding **\$10,000.00**.
+### Test 2: High-Value Materiality Filtering (`02_high_value_anomaly_test.sql`)
+Converted formatted text currency strings (`"$9,000,000.00"`) into real numeric data types to isolate exact duplicate transaction groups with combined dollar exposure exceeding **$10,000.00**.
 
 ```sql
 SELECT 
@@ -77,13 +86,15 @@ HAVING COUNT(*) > 1
 ORDER BY total_exposure_amount DESC;
 ```
 
+* **Scale & Population Denominator:** Returned **142 exception groups** covering **328 transactions** ($10,000+ exposure threshold).
 * **Visual Evidence:**
+
 ![Test 2 Query Results](./assets/02_high_value_results.png)
 
 ---
 
-### 3. Anti-Structuring Split Purchase Scanner (`03_sub_materiality_structuring_test.sql`)
-Employees seeking to bypass \$5,000 formal bidding requirements or P-Card purchase ceilings often split single invoices into multiple smaller purchases. I wrote a targeted scan for vendor transaction clusters falling between **\$4,800.00 and \$4,999.99**.
+### Test 3: Sub-Materiality Anti-Structuring Scanner (`03_sub_materiality_structuring_test.sql`)
+Scanned for same-day vendor transaction clusters falling between **$4,800.00 and $4,999.99**, targeting activity immediately below a commonly used $5,000 threshold for competitive bidding or purchasing authority approval.
 
 ```sql
 SELECT 
@@ -99,48 +110,64 @@ HAVING COUNT(*) > 1
 ORDER BY payment_count DESC;
 ```
 
+* **Scale & Population Denominator:** Returned **89 exception groups** covering **194 transactions**.
+* **Methodology Limitation Note:** *This query detects same-day vendor transaction splits only. Actual invoice structuring frequently spans multiple days or weeks across different municipal departments. A rolling-window aggregation query is the planned next iteration of this test.*
 * **Visual Evidence:**
+
 ![Test 3 Query Results](./assets/03_structuring_results.png)
 
 ---
 
-### 4. Substantive Ledger Drill-Down Case Studies (`04_substantive_drill_down.sql`)
+## Substantive Metadata Drill-Downs
 
-#### Case Study 1: Konica Minolta Cost Allocation Analysis
-* **Initial Flag:** Test 1 caught \$6.72 repeating 693 times on 10/02/2025 (\$4,656.96 total exposure).
-* **Audit Resolution:** Querying `TRANSACTION ID` and device tracking metrics revealed sequential unique system suffixes. This balances as an automated ERP system routine splitting a centralized master equipment invoice across individual departmental budget links rather than an overpayment error.
+### Case Study 1: Konica Minolta Cost Allocation Analysis
+* **Initial Flag:** Test 1 flagged a $6.72 charge repeating 693 times on a single date ($4,656.96 total exposure).
+* **Data Explanation:** Querying `TRANSACTION ID` and device serial numbers revealed unique sequential IDs (`EFT2626...`). The metadata is consistent with an automated ERP cost-allocation routine distributing shared printing infrastructure charges across city departments. *I did not verify against physical master invoices or department print logs, which published open data does not contain.*
+
 ![Konica Minolta Evidence](./assets/04_drilldown_konica.png)
 
-#### Case Study 2: Wells Fargo Municipal Debt Service Analysis
-* **Initial Flag:** Test 2 caught \$9,000,000.00 repeating 49 times on 05/01/2026 (\$441,000,000 total exposure).
-* **Audit Resolution:** Querying `FUND NAME`, `ACCOUNT NAME`, and `INV NUM` showed payments assigned to explicit Water/Power Revenue funds matching unique institutional trust reference identifiers. This confirms authorized bond principal and interest payouts executed through trustee clearance accounts.
+### Case Study 2: Wells Fargo Municipal Debt Service Analysis
+* **Initial Flag:** Test 2 flagged a $9,000,000.00 payment repeating 49 times on a single date ($441,000,000 total exposure).
+* **Data Explanation:** Querying `FUND NAME`, `ACCOUNT NAME`, and `INV NUM` showed transactions assigned to Water/Power Revenue funds matching unique, system-generated institutional treasury reference identifiers. The metadata is consistent with authorized bond principal and interest redemptions executed through a financial trustee. *I did not verify against trustee bond indentures or bank wire confirmations, which published open data does not contain.*
+
 ![Wells Fargo Evidence](./assets/04_drilldown_wellsfargo.png)
 
-#### Case Study 3: United Site Services Contract Analysis
-* **Initial Flag:** Test 3 caught \$4,960.00 repeating 15 times on 10/30/2025 (\$74,400 total exposure).
-* **Audit Resolution:** Querying `PO NUM` and `DETAILED ITEM DESCRIPTION` revealed a shared Master Contract Purchase Order (`CPO74260000423827`) for Mayoral Special Projects. The individual line items represented distinct physical weekly route servicing locations, clearing suspicion of intentional P-Card limit structuring.
+### Case Study 3: United Site Services Contract Analysis
+* **Initial Flag:** Test 3 flagged 15 transactions of $4,960.00 on a single date ($74,400 total exposure).
+* **Data Explanation:** Querying `PO NUM` and `DETAILED ITEM DESCRIPTION` revealed a shared Master Contract Purchase Order (`CPO74260000423827`) for Mayoral Special Projects, with distinct line items corresponding to individual weekly route servicing locations. The metadata is consistent with valid contract line-item billings rather than employee P-Card limit evasion. *I did not verify against physical service delivery receipts or formal contract files, which published open data does not contain.*
+
 ![United Site Services Evidence](./assets/04_drilldown_results.png)
 
 ---
 
-## Summary of Audit Findings
+## Summary of Analytical Findings
 
-| Vendor Name | Flagged Condition | Total Exposure | Audit Findings & Resolution |
+| Vendor Name | Flagged Condition | Total Exposure | Metadata Analysis & Resolution |
 | :--- | :--- | :--- | :--- |
-| **Wells Fargo Bank** | 49 Same-Day \$9M Transactions | \$441,000,000.00 | **Cleared:** Authorized municipal debt service and revenue bond redemptions. |
-| **United Site Services** | 15 Transactions between \$4.8k–\$5k | \$74,400.00 | **Cleared:** Line-item route servicing under a master Contract Purchase Order (CPO). |
-| **Konica Minolta** | 693 Duplicate \$6.72 Entries | \$4,656.96 | **Cleared:** Automated system-generated cost allocation across city departments. |
+| **Wells Fargo Bank** | 49 Same-Day $9M Transactions | $441,000,000.00 | **Explained by data:** Metadata is consistent with authorized municipal debt service and revenue bond redemptions. |
+| **United Site Services** | 15 Same-Day $4.9k Transactions | $74,400.00 | **Explained by data:** Metadata is consistent with line-item route servicing under a master Contract Purchase Order (CPO). |
+| **Konica Minolta** | 693 Duplicate $6.72 Entries | $4,656.96 | **Explained by data:** Metadata is consistent with automated ERP cost allocation routines across city departments. |
 
 ---
 
-## How to Run This Audit Locally
+## What This Open Dataset Cannot Show
+
+When conducting data analytics on open-government datasets, conclusions are limited by available fields. This dataset **does not** contain:
+1. **Approval Workflows:** No supervisor sign-off timestamps, secondary approval logs, or delegated authority thresholds.
+2. **Source Documents:** No scanned physical invoices, bill-of-lading receipts, or cancelled check images.
+3. **Contract Files:** No formal legal contract language, bidding specifications, or amendment histories.
+4. **Accounting Timestamps:** No distinction between the transaction posting date and the actual payment/wire execution date.
+
+---
+
+## How to Execute Analytics Locally
 
 ### Prerequisites
-* SQLite3 installed locally or a visual editor like **DB Browser for SQLite**.
-* Raw source downloaded from the [Official L.A. Checkbook Catalog Page]([https://data.lacity.org/](https://controllerdata.lacity.org/Purchasing/Checkbook-L-A-Data/pggv-e4fn/about_data)) and loaded as table `Checkbook_LA`.
+* SQLite3 installed locally or a visual editor such as **DB Browser for SQLite**.
+* City of Los Angeles Checkbook dataset loaded into SQLite as table `Checkbook_LA`.
 
 ### Execution
-Execute the SQL scripts in numerical order inside your shell environment:
+Execute the SQL scripts in numerical order:
 ```bash
 sqlite3 Checkbook_LA.db < 01_duplicate_payment_test.sql
 sqlite3 Checkbook_LA.db < 02_high_value_anomaly_test.sql
@@ -150,7 +177,8 @@ sqlite3 Checkbook_LA.db < 04_substantive_drill_down.sql
 
 ---
 
-## Key Takeaways for Public Sector Auditing
+## Key Takeaways for Public Sector Data Analytics
 
-1. **Full-Population Analytics:** Writing reproducible SQL exception scripts allows auditors to analyze 100% of municipal spend rather than relying on restrictive random data sampling.
-2. **Context Prevents False Alarms:** Automated exceptions are initial indicators, not definitive proof of fraud. Developing a deep understanding of fund accounting layouts and master contract structures is critical before escalating structural audit findings.
+1. **Full-Population Screening:** Using reproducible SQL exception scripts enables 100% population screening across municipal spend, replacing restrictive manual sampling.
+2. **Metadata Context Prevents False Alarms:** Automated exceptions highlight statistical patterns, not proof of non-compliance or fraud. Understanding fund accounting and master contract structures is required before drawing operational conclusions.
+3. **Transparent Boundaries:** Acknowledging data limitations and testing constraints is fundamental to delivering objective, reliable analytics in public finance.
