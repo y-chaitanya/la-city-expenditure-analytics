@@ -47,6 +47,13 @@ SELECT
     COUNT(DISTINCT "TRANSACTION ID")  AS distinct_payments
 FROM Checkbook_LA
 WHERE "VENDOR NAME" IS NOT NULL
+  -- Redacted payees are published as 'PRIVACY-<DEPARTMENT>'. These are not
+  -- vendors; they are anonymized individuals (refunds, reimbursements) sharing
+  -- one label. Grouping on them manufactures false duplicate clusters.
+  AND "VENDOR NAME" NOT LIKE 'PRIVACY-%'
+  -- $0.00 entries are accounting adjustments, not disbursements. Grouping
+  -- identical zero amounts flags entries no money moved through.
+  AND CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL) <> 0
 GROUP BY "VENDOR NAME", "TRANSACTION DATE", "DOLLAR AMOUNT"
 HAVING COUNT(DISTINCT "TRANSACTION ID") > 1
 ORDER BY distinct_payments DESC;
