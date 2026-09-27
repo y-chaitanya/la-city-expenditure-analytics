@@ -10,7 +10,7 @@
 Public expenditure datasets often contain high-dollar totals and repeating line items that trigger automated exception flags. Without underlying accounting context, these flags are easily mischaracterized. This project performs an independent data analytics review of the **City of Los Angeles Checkbook dataset** (747,363 expenditure records from the City Controller's open data portal) using SQLite to evaluate duplicate payment patterns, test for potential invoice structuring, and examine high-dollar anomalies.
 
 ### Principal Conclusion
-**Three exception tests over 747,363 records produced identified exception populations. The three largest exception clusters by dollar exposure were examined against fund, account, purchase order, and invoice metadata, and each had a legitimate, documented explanation in the data. No control weakness, overpayment, or non-compliance is asserted by this analysis.**
+**Three exception tests over 747,363 records produced 2,841 duplicate exception groups (0.82% of the population), of which 142 exceeded $10,000 in combined exposure, plus 89 same-day sub-threshold clusters and 708 distinct transactions involved in multi-day sub-threshold pairings. The three largest exception clusters by dollar exposure were examined against fund, account, purchase order and invoice metadata, and each had a legitimate, documented explanation in the data. No control weakness, overpayment, or non-compliance is asserted by this analysis.**
 
 ---
 
@@ -89,6 +89,7 @@ ORDER BY total_exposure_amount DESC;
 ```
 
 * **Scale & Population Denominator:** Returned **142 exception groups** covering **328 transactions** ($10,000+ exposure threshold).
+* **Relationship to Test 1:** These groups are a materiality-filtered subset of the Test 1 population, not additional exceptions. They are not additive.
 * **Visual Evidence:**
 
 ![Test 2 Query Results](./assets/02_high_value_results.png)
@@ -152,7 +153,7 @@ JOIN filtered_transactions t2
 ORDER BY t1."VENDOR NAME", t1.iso_date;
 ```
 
-* **Scale & Population Denominator:** Returned **1,172 candidate transactions** across a 7-day rolling window.
+* **Scale:** Returned **1,172 transaction pairs** falling within a 7-day window, involving **708 distinct transactions**. A single payment can pair with several others, so the pair count overstates the number of payments involved.
 * **Visual Evidence:**
 
 ![Test 3b Query Results](./assets/03b_rolling_window_results.png)
@@ -178,7 +179,7 @@ SUBSTR("TRANSACTION DATE", 4, 2) AS iso_date
 In addition to date reformatting, the query was refactored to pre-filter the sub-materiality range ($4,800.00 to $4,999.99) inside the Common Table Expression (CTE) prior to performing the self-join:
 
 * **Before Optimization:** Unfiltered self-join evaluated 747k × 747k row permutations before filtering dates/amounts → 0 rows returned (5,254 ms).
-* **After Optimization:** Pre-filtered target population reduced input size down to relevant sub-materiality records before joining → **1,172 valid exception clusters identified**.
+* **After Optimization:** Pre-filtered target population reduced input size down to relevant sub-materiality records before joining → **1,172 transaction pairs returned (708 distinct transactions)**
 
 ## Substantive Metadata Drill-Downs
 
@@ -209,6 +210,32 @@ In addition to date reformatting, the query was refactored to pre-filter the sub
 | **Wells Fargo Bank** | 49 Same-Day $9M Transactions | $441,000,000.00 | **Explained by data:** Metadata is consistent with authorized municipal debt service and revenue bond redemptions. |
 | **United Site Services** | 15 Same-Day $4.9k Transactions | $74,400.00 | **Explained by data:** Metadata is consistent with line-item route servicing under a master Contract Purchase Order (CPO). |
 | **Konica Minolta** | 693 Duplicate $6.72 Entries | $4,656.96 | **Explained by data:** Metadata is consistent with automated ERP cost allocation routines across city departments. |
+
+---
+## 6. INTERACTIVE DRILL-DOWN PANEL PREVIEW
+
+To bridge the gap between automated backend logic and practical management oversight, I designed and executed a lightweight, browser-based data application using the Streamlit Python framework. 
+
+This engine connects directly to the local 747,363-row SQLite database (`ap_data.db`) to enable non-technical auditors to search vendor lines, cross-reference account metadata, and clear false-positive exception groups in seconds.
+
+### Handling schema drift and date parsing
+
+Two problems surfaced during local deployment, both common in raw municipal open data.
+
+**Schema drift.** The import tool altered the casing of the table and column names and left trailing spaces in some headers (`"VENDOR NAME "` rather than `"VENDOR NAME"`), so hard-coded column references failed with `no such table: Checkbook_LA`.
+
+**Silent NULL date arithmetic.** The dataset stores dates as US-format text (`MM/DD/YYYY`). SQLite's `JULIANDAY()` requires ISO format, so every date comparison evaluated to NULL and the rolling-window query returned zero rows — without raising an error.
+
+The fix for both, without altering the source data:
+
+* The app runs `PRAGMA table_info` at startup to read the actual schema, and matches column names case- and whitespace-insensitively rather than hard-coding them.
+* Dates are reconstructed into ISO format with `SUBSTR` inside a CTE at query time.
+
+### Dashboard Verification Screenshot
+
+The screenshot below validates the running local deployment interface on my machine. When querying the keyword string `UNITED SITE`, the system maps the schema variables instantly, runs memory-cached evaluations, and prints the matching transaction lines, invoice references, and council fund groupings with zero processing delay.
+
+![Interactive Data Analytics Dashboard](./assets/dashboard_overview.png)
 
 ---
 
