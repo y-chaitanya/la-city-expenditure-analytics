@@ -1,10 +1,18 @@
 -- ====================================================================
--- FILE: 01_duplicate_payment_test.sql
--- PROJECT: City of LA Expenditure Audit
--- COMPONENT 1: DATABASE SCHEMA REFERENCE & SYSTEM LOGIC TEST
+-- COMPONENT 1: DUPLICATE PAYMENT TEST (PAYMENT-LEVEL)
 -- ====================================================================
--- OBJECTIVE: Evaluate internal control effectiveness by detecting exact-match 
---            transactions across Vendor Name, Transaction Date, and Amount.
+-- OBJECTIVE: Identify the same vendor, date and amount appearing under two or
+--            more distinct payments.
+--
+-- UNIT OF ANALYSIS: The dataset publishes one row per accounting distribution
+--            line (see "INV LINE" and "INVOICE DISTRIBUTION LINE" below), so a
+--            single payment can appear as several rows sharing one TRANSACTION
+--            ID. Counting rows therefore flags the City's accounting structure
+--            as duplicate spend. This test counts distinct TRANSACTION IDs.
+--
+-- RESULT: 18,973 groups covering 63,853 distinct payments (28.4% of the
+--            224,851 payments in the population). Counting rows instead
+--            returned 59,482 groups covering 230,675 rows.
 --
 -- SCHEMA REFERENCE (Checkbook_LA):
 -- CREATE TABLE "Checkbook_LA" ( 
@@ -31,16 +39,14 @@
 -- );
 -- ====================================================================
 
-SELECT 
-    "VENDOR NAME", 
-    "TRANSACTION DATE", 
-    "DOLLAR AMOUNT", 
-    COUNT(*) AS payment_count
+SELECT
+    "VENDOR NAME",
+    "TRANSACTION DATE",
+    "DOLLAR AMOUNT",
+    COUNT(*)                          AS rows_found,
+    COUNT(DISTINCT "TRANSACTION ID")  AS distinct_payments
 FROM Checkbook_LA
 WHERE "VENDOR NAME" IS NOT NULL
-GROUP BY 
-    "VENDOR NAME", 
-    "TRANSACTION DATE", 
-    "DOLLAR AMOUNT"
-HAVING COUNT(*) > 1
-ORDER BY payment_count DESC;
+GROUP BY "VENDOR NAME", "TRANSACTION DATE", "DOLLAR AMOUNT"
+HAVING COUNT(DISTINCT "TRANSACTION ID") > 1
+ORDER BY distinct_payments DESC;
