@@ -35,6 +35,9 @@ WITH tx AS (
         SUM(CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL)) AS band_total
     FROM Checkbook_LA
     WHERE "VENDOR NAME" IS NOT NULL
+     -- Redacted payees ('PRIVACY-<DEPARTMENT>') are anonymized individuals,
+      -- not vendors. Excluded here to match Tests 1, 2 and 3.
+      AND "VENDOR NAME" NOT LIKE 'PRIVACY-%'
       AND CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL) BETWEEN 4800.00 AND 4999.99
     GROUP BY "TRANSACTION ID", "VENDOR NAME", "TRANSACTION DATE"
 )
