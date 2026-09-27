@@ -7,197 +7,229 @@
 
 ## Executive Summary
 
-Public expenditure datasets often contain high-dollar totals and repeating line items that trigger automated exception flags. Without underlying accounting context, these flags are easily mischaracterized. This project performs an independent data analytics review of the **City of Los Angeles Checkbook dataset** (747,363 expenditure records from the City Controller's open data portal) using SQLite to evaluate duplicate payment patterns, test for potential invoice structuring, and examine high-dollar anomalies.
+Public expenditure datasets contain repeating line items and high-dollar totals that trigger automated exception flags. Without accounting context, those flags are easily mischaracterized. This project applies deterministic exception tests to the **City of Los Angeles Checkbook dataset** using SQLite, then drills into the largest exceptions to establish what the published metadata can and cannot explain.
+
+The most consequential result was not an exception. It was the discovery that the first version of these tests **counted accounting lines as though they were payments**, and that correcting the unit of analysis removed roughly two-thirds of the exceptions the tests reported.
 
 ### Principal Conclusion
-**Three exception tests over 747,363 records produced 2,841 duplicate exception groups (0.82% of the population), of which 142 exceeded $10,000 in combined exposure, plus 89 same-day sub-threshold clusters and 708 distinct transactions involved in multi-day sub-threshold pairings. The three largest exception clusters by dollar exposure were examined against fund, account, purchase order and invoice metadata, and each had a legitimate, documented explanation in the data. No control weakness, overpayment, or non-compliance is asserted by this analysis.**
+
+**The dataset contains 747,363 accounting lines representing 224,851 distinct payments — an average of 3.3 lines per payment. Counting at the payment level, three exception tests returned 18,973 duplicate-payment groups covering 63,853 payments (28.4%), 613 high-value groups covering 1,680 payments (0.75%), and 101 same-day sub-threshold clusters covering 268 payments (0.12%). The three largest exceptions by dollar exposure were examined against fund, account, purchase order and invoice metadata. Two proved to be single payments distributed across many budget lines; one proved to be 49 genuinely separate payments, explained by the fund and invoice metadata as bond debt service. No control weakness, overpayment, or non-compliance is asserted by this analysis.**
+
+---
+
+## Key Methodological Finding: Lines Are Not Payments
+
+The City publishes each payment as **one row per accounting distribution line**. A single invoice charged against six funds appears as six rows with the same vendor, date and amount.
+
+A duplicate-payment test that groups on vendor, date and amount therefore flags the City's own accounting structure as if it were duplicate spending.
+
+The correction is to count distinct values of `TRANSACTION ID` rather than rows, and to flag a group only when the same vendor, date and amount appear under **two or more different transaction IDs**:
+
+```sql
+-- Original: counts accounting lines
+HAVING COUNT(*) > 1
+
+-- Corrected: counts payments
+HAVING COUNT(DISTINCT "TRANSACTION ID") > 1
+```
+
+Effect of the correction on Test 1:
+
+| Measure | Counting lines | Counting payments |
+| :--- | ---: | ---: |
+| Exception groups | 59,482 | 18,973 |
+| Transactions involved | 230,675 | 63,853 |
+| Share of population | 30.9% of 747,363 lines | 28.4% of 224,851 payments |
+
+**68% of the groups the original test reported were artefacts of the data's structure**, not candidate duplicates. Every figure below is stated at the payment level.
 
 ---
 
 ## Dataset Scope & Population Scale
 
-* **Full Dataset Population:** 747,363 published transaction rows from the *Checkbook LA* open data table.
-* **Scope & Completeness:** Represents 100% of the publicly released municipal expenditure check register records in the dataset.
-* **Key Fields Analyzed:** Vendor Name, Transaction Date, Dollar Amount, Fund Name, Account Name, PO Number, Invoice Number, and Detailed Item Description.
+* **Published rows:** 747,363 accounting lines from the *Checkbook LA* open data table.
+* **Distinct payments:** 224,851, identified by `TRANSACTION ID` — a ratio of 3.32 lines per payment.
+* **Scope:** 100% of the publicly released expenditure records in the dataset. No sampling.
+* **Key fields analyzed:** Transaction ID, Vendor Name, Transaction Date, Dollar Amount, Fund Name, Account Name, PO Number, Invoice Number, Detailed Item Description.
 
 ---
 
 ## Repository Structure
 
 ```text
-la-city-expenditure-audit/
+la-city-expenditure-analytics/
 ├── assets/
-│   ├── 01_duplicate_results.png       # Screenshot: Baseline duplicate payment query output
-│   ├── 02_high_value_results.png      # Screenshot: Materiality threshold query output
-│   ├── 03_structuring_results.png     # Screenshot: Sub-materiality split purchase query output
-│   ├── 03b_rolling_window_results.png # Screenshot: 7-day rolling window query output
-│   ├── 04_drilldown_konica.png        # Screenshot: Konica Minolta cost allocation metadata
-│   ├── 04_drilldown_wellsfargo.png    # Screenshot: Wells Fargo debt service tranche metadata
-│   └── 04_drilldown_results.png       # Screenshot: United Site Services CPO metadata
-├── 01_duplicate_payment_test.sql      # Schema setup & exact duplicate exception scanner
-├── 02_high_value_anomaly_test.sql     # Materiality filter ($10k+ duplicate exposure)
-├── 03_sub_materiality_structuring_test.sql # Anti-structuring split purchase scanner ($4.8k–$5k)
-├── 03b_rolling_window_structuring.sql      # 7-day rolling window anti-structuring scanner
-├── 04_substantive_drill_down.sql      # Root-cause metadata drill-downs
-├── .gitignore                         # Excludes local SQLite database binaries (>100MB)
-└── README.md                          # Project documentation & analytical findings
+│   ├── 01_duplicate_results.png       # Screenshot: Duplicate payment test output
+│   ├── 02_high_value_results.png      # Screenshot: Materiality threshold test output
+│   ├── 03_structuring_results.png     # Screenshot: Same-day sub-threshold test output
+│   ├── 03b_rolling_window_results.png # Screenshot: 7-day rolling window test output
+│   ├── 04_drilldown_konica.png        # Screenshot: Konica Minolta allocation metadata
+│   ├── 04_drilldown_wellsfargo.png    # Screenshot: Wells Fargo debt service metadata
+│   ├── 04_drilldown_results.png       # Screenshot: United Site Services CPO metadata
+│   └── dashboard_overview.png         # Screenshot: Exception review interface
+├── 01_duplicate_payment_test.sql      # Duplicate payment scanner (payment-level)
+├── 02_high_value_anomaly_test.sql     # Materiality filter ($10k+ per payment)
+├── 03_sub_materiality_structuring_test.sql # Same-day sub-threshold clusters
+├── 03b_rolling_window_structuring.sql      # 7-day rolling window scanner
+├── 04_substantive_drill_down.sql      # Metadata drill-downs for the three largest exceptions
+├── app.py                             # Streamlit exception review interface
+├── requirements.txt                   # Python dependencies
+├── .gitignore                         # Excludes the local database and raw CSV
+└── README.md                          # This file
 ```
 
 ---
 
-## Analytical Methodology, SQL Exception Tests & Scale
+## Exception Tests
 
-### Test 1: Baseline Duplicate Payment Scanner (`01_duplicate_payment_test.sql`)
-Identified exact duplicate payment records matching on **Vendor Name**, **Transaction Date**, and **Dollar Amount**.
+### Test 1: Duplicate Payment Scanner (`01_duplicate_payment_test.sql`)
+
+Flags the same vendor, date and amount appearing under more than one transaction ID.
 
 ```sql
-SELECT 
-    "VENDOR NAME", 
-    "TRANSACTION DATE", 
-    "DOLLAR AMOUNT", 
-    COUNT(*) AS payment_count
+SELECT "VENDOR NAME", "TRANSACTION DATE", "DOLLAR AMOUNT",
+       COUNT(*) AS rows_found,
+       COUNT(DISTINCT "TRANSACTION ID") AS distinct_payments
 FROM Checkbook_LA
 WHERE "VENDOR NAME" IS NOT NULL
 GROUP BY "VENDOR NAME", "TRANSACTION DATE", "DOLLAR AMOUNT"
-HAVING COUNT(*) > 1
-ORDER BY payment_count DESC;
+HAVING COUNT(DISTINCT "TRANSACTION ID") > 1
+ORDER BY distinct_payments DESC;
 ```
 
-* **Scale & Population Denominator:** Returned **2,841 exception groups** covering **6,112 total transactions** (0.82% of the full 747,363 population).
-* **Visual Evidence:**
+* **Result:** 18,973 exception groups covering **63,853 distinct payments** — 28.4% of the 224,851 payments in the population.
+* **Interpretation:** At this scale the test is a screening filter, not a finding. Recurring obligations of identical value — rent, licences, per-unit service charges — are expected to repeat.
 
 ![Test 1 Query Results](./assets/01_duplicate_results.png)
 
 ---
 
-### Test 2: High-Value Materiality Filtering (`02_high_value_anomaly_test.sql`)
-Converted formatted text currency strings (`"$9,000,000.00"`) into real numeric data types to isolate exact duplicate transaction groups with combined dollar exposure exceeding **$10,000.00**.
+### Test 2: High-Value Materiality Filter (`02_high_value_anomaly_test.sql`)
+
+The same test restricted to payments of $10,000 or more. Currency is stored as formatted text and is cast to a numeric type.
 
 ```sql
-SELECT 
-    "VENDOR NAME",
-    "TRANSACTION DATE",
-    "DOLLAR AMOUNT",
-    COUNT(*) AS duplicate_count,
-    SUM(CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL)) AS total_exposure_amount
+SELECT "VENDOR NAME", "TRANSACTION DATE", "DOLLAR AMOUNT",
+       COUNT(DISTINCT "TRANSACTION ID") AS distinct_payments,
+       SUM(CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL)) AS total_exposure
 FROM Checkbook_LA
 WHERE "VENDOR NAME" IS NOT NULL
   AND CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL) >= 10000.00
 GROUP BY "VENDOR NAME", "TRANSACTION DATE", "DOLLAR AMOUNT"
-HAVING COUNT(*) > 1
-ORDER BY total_exposure_amount DESC;
+HAVING COUNT(DISTINCT "TRANSACTION ID") > 1
+ORDER BY total_exposure DESC;
 ```
 
-* **Scale & Population Denominator:** Returned **142 exception groups** covering **328 transactions** ($10,000+ exposure threshold).
-* **Relationship to Test 1:** These groups are a materiality-filtered subset of the Test 1 population, not additional exceptions. They are not additive.
-* **Visual Evidence:**
+* **Result:** 613 exception groups covering **1,680 payments** — 0.75% of the population.
+* **Relationship to Test 1:** A materiality-filtered subset of Test 1, not additional exceptions. Not additive.
+* **Why this matters:** 1,680 payments is a population a reviewer could work through. That is the practical value of filtering by materiality after correcting the unit of analysis.
 
 ![Test 2 Query Results](./assets/02_high_value_results.png)
 
 ---
 
-### Test 3: Sub-Materiality Anti-Structuring Scanner (`03_sub_materiality_structuring_test.sql`)
-Scanned for same-day vendor transaction clusters falling between **$4,800.00 and $4,999.99**, targeting activity immediately below a commonly used $5,000 threshold for competitive bidding or purchasing authority approval.
+### Test 3: Same-Day Sub-Threshold Clusters (`03_sub_materiality_structuring_test.sql`)
+
+Flags vendors paid more than once on the same day in the $4,800.00–$4,999.99 band, immediately below a commonly used $5,000 approval threshold.
 
 ```sql
-SELECT 
-    "VENDOR NAME",
-    "TRANSACTION DATE",
-    COUNT(*) AS payment_count,
-    GROUP_CONCAT("DOLLAR AMOUNT") AS amounts
+SELECT "VENDOR NAME", "TRANSACTION DATE",
+       COUNT(DISTINCT "TRANSACTION ID") AS distinct_payments,
+       GROUP_CONCAT("DOLLAR AMOUNT") AS amounts
 FROM Checkbook_LA
 WHERE "VENDOR NAME" IS NOT NULL
   AND CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL) BETWEEN 4800.00 AND 4999.99
 GROUP BY "VENDOR NAME", "TRANSACTION DATE"
-HAVING COUNT(*) > 1
-ORDER BY payment_count DESC;
+HAVING COUNT(DISTINCT "TRANSACTION ID") > 1
+ORDER BY distinct_payments DESC;
 ```
 
-* **Scale & Population Denominator:** Returned **89 exception groups** covering **194 transactions**.
-* **Methodology Limitation Note:** *This query detects same-day vendor transaction splits only. Actual invoice structuring frequently spans multiple days or weeks across different municipal departments. A rolling-window aggregation query is the planned next iteration of this test.*
-* **Visual Evidence:**
+* **Result:** 101 exception groups covering **268 payments** — 0.12% of the population.
+* **Threshold caveat:** $5,000 is a commonly used approval threshold and is used here as a working assumption. The applicable City threshold, and the rules on aggregating related purchases, would need to be confirmed against the Administrative Code before any conclusion about threshold evasion.
+* **Limitation:** Same-day splits only. Test 3b extends the window.
 
 ![Test 3 Query Results](./assets/03_structuring_results.png)
 
 ---
 
-### Test 3b: Multi-Day Rolling Window Anti-Structuring Scanner (`03b_rolling_window_structuring.sql`)
-Scanned for sub-materiality vendor payments ($4,800.00 to $4,999.99) occurring within a **7-day rolling window** for the same vendor, converting `MM/DD/YYYY` text strings into standard ISO `YYYY-MM-DD` format to perform SQLite `JULIANDAY` date arithmetic.
+### Test 3b: Multi-Day Rolling Window (`03b_rolling_window_structuring.sql`)
+
+The same band, paired across a 7-day window for the same vendor. Dates are reconstructed into ISO format so `JULIANDAY` arithmetic works.
 
 ```sql
-WITH filtered_transactions AS (
-    SELECT 
-        ROWID AS original_rowid,
-        "VENDOR NAME",
-        "TRANSACTION DATE",
-        "DOLLAR AMOUNT",
-        SUBSTR("TRANSACTION DATE", 7, 4) || '-' || 
-        SUBSTR("TRANSACTION DATE", 1, 2) || '-' || 
-        SUBSTR("TRANSACTION DATE", 4, 2) AS iso_date
-    FROM Checkbook_LA
-    WHERE "VENDOR NAME" IS NOT NULL
-      AND CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL) BETWEEN 4800.00 AND 4999.99
+WITH tx AS (
+  SELECT DISTINCT
+    "TRANSACTION ID" AS txid,
+    "VENDOR NAME" AS vendor,
+    SUBSTR("TRANSACTION DATE", 7, 4) || '-' ||
+    SUBSTR("TRANSACTION DATE", 1, 2) || '-' ||
+    SUBSTR("TRANSACTION DATE", 4, 2) AS iso_date
+  FROM Checkbook_LA
+  WHERE "VENDOR NAME" IS NOT NULL
+    AND CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL) BETWEEN 4800.00 AND 4999.99
 )
-SELECT 
-    t1."VENDOR NAME",
-    t1."TRANSACTION DATE" AS first_transaction_date,
-    t2."TRANSACTION DATE" AS second_transaction_date,
-    CAST(JULIANDAY(t2.iso_date) - JULIANDAY(t1.iso_date) AS INT) AS days_between,
-    t1."DOLLAR AMOUNT" AS first_amount,
-    t2."DOLLAR AMOUNT" AS second_amount
-FROM filtered_transactions t1
-JOIN filtered_transactions t2 
-    ON t1."VENDOR NAME" = t2."VENDOR NAME"
-    AND t1.original_rowid != t2.original_rowid
-    AND JULIANDAY(t2.iso_date) - JULIANDAY(t1.iso_date) BETWEEN 1 AND 7
-ORDER BY t1."VENDOR NAME", t1.iso_date;
+SELECT a.vendor, a.iso_date AS first_date, b.iso_date AS second_date,
+       CAST(JULIANDAY(b.iso_date) - JULIANDAY(a.iso_date) AS INT) AS days_between
+FROM tx a
+JOIN tx b ON a.vendor = b.vendor
+         AND a.txid <> b.txid
+         AND JULIANDAY(b.iso_date) - JULIANDAY(a.iso_date) BETWEEN 1 AND 7
+ORDER BY a.vendor, a.iso_date;
 ```
 
-* **Scale:** Returned **1,172 transaction pairs** falling within a 7-day window, involving **708 distinct transactions**. A single payment can pair with several others, so the pair count overstates the number of payments involved.
-* **Visual Evidence:**
+* **Result:** 569 payment pairs, involving **553 distinct payments** — 0.25% of the population. A payment can pair with several others, so the pair count exceeds the number of payments involved.
 
 ![Test 3b Query Results](./assets/03b_rolling_window_results.png)
 
-## Technical Note: Date Formatting Bug & Query Optimization
+---
 
-### Problem Statement
-Initial execution of the 7-day rolling window query returned **0 rows** despite taking 5,254 ms to run. Analysis revealed that SQLite's built-in `JULIANDAY()` function strictly requires standard ISO dates (`YYYY-MM-DD`). 
+## Technical Notes: Two Failures Worth Recording
 
-The open source `Checkbook_LA` dataset stores transaction dates as US-formatted text strings (`MM/DD/YYYY`, e.g., `10/28/2025`). Because `JULIANDAY('10/28/2025')` returns `NULL`, all date math comparisons (`NULL - NULL`) silently evaluated to `NULL`, returning zero records across the 747,363-row population.
+### 1. A query that silently returned nothing
 
-### Root-Cause Fix & String Formatting
-To resolve this without altering the underlying database schema, string parsing (`SUBSTR`) was introduced inside a Common Table Expression (CTE) to dynamically reconstruct the date string into standard ISO format:
+The first run of the rolling-window query returned **0 rows** after 5,254 ms. `JULIANDAY()` requires ISO dates (`YYYY-MM-DD`); the dataset stores US-format text (`MM/DD/YYYY`). `JULIANDAY('10/28/2025')` returns `NULL`, so every date comparison evaluated to `NULL` and no rows matched — with no error raised.
+
+A test that cannot detect what it is designed to detect looks identical to a test that found nothing. The fix reconstructs the date inside a CTE:
 
 ```sql
--- Reconstructing MM/DD/YYYY string into YYYY-MM-DD
-SUBSTR("TRANSACTION DATE", 7, 4) || '-' || 
-SUBSTR("TRANSACTION DATE", 1, 2) || '-' || 
+SUBSTR("TRANSACTION DATE", 7, 4) || '-' ||
+SUBSTR("TRANSACTION DATE", 1, 2) || '-' ||
 SUBSTR("TRANSACTION DATE", 4, 2) AS iso_date
 ```
-### Execution Optimization
 
-In addition to date reformatting, the query was refactored to pre-filter the sub-materiality range ($4,800.00 to $4,999.99) inside the Common Table Expression (CTE) prior to performing the self-join:
+The query was also refactored to filter the amount band inside the CTE before the self-join, rather than joining the full population first.
 
-* **Before Optimization:** Unfiltered self-join evaluated 747k × 747k row permutations before filtering dates/amounts → 0 rows returned (5,254 ms).
-* **After Optimization:** Pre-filtered target population reduced input size down to relevant sub-materiality records before joining → **1,172 transaction pairs returned (708 distinct transactions)**
+### 2. The wrong unit of analysis
+
+The first version of every test counted rows. As set out above, rows are accounting lines, not payments. The error was found by tracing a published figure back to the database and getting a different answer — the totals in an earlier draft of this README did not reconcile to the data they claimed to describe.
+
+Both failures share a property: **neither produced an error message.** One returned zero rows that looked like a clean result; the other returned inflated counts that looked plausible. Reconciling every reported figure to a re-run query is what surfaced them.
+
+---
 
 ## Substantive Metadata Drill-Downs
 
-### Case Study 1: Konica Minolta Cost Allocation Analysis
-* **Initial Flag:** Test 1 flagged a $6.72 charge repeating 693 times on a single date ($4,656.96 total exposure).
-* **Data Explanation:** Querying `TRANSACTION ID` and device serial numbers revealed unique sequential IDs (`EFT2626...`). The metadata is consistent with an automated ERP cost-allocation routine distributing shared printing infrastructure charges across city departments. *I did not verify against physical master invoices or department print logs, which published open data does not contain.*
+### Case Study 1: Konica Minolta — cost allocation across departments
+
+* **Flagged:** $6.72 appearing on 693 rows dated 10/02/2025, totalling $4,656.96.
+* **Resolved:** those 693 rows carry only **11 distinct transaction IDs**. This is 11 invoices distributed across hundreds of departmental budget lines, not 693 payments. The metadata is consistent with an automated cost-allocation routine for shared printing infrastructure. The same pattern repeats at other per-unit rates on the same date ($5.24 across 539 lines, $6.74 across 315 lines).
+* *Not verified against master invoices or device logs, which published data does not contain.*
 
 ![Konica Minolta Evidence](./assets/04_drilldown_konica.png)
 
-### Case Study 2: Wells Fargo Municipal Debt Service Analysis
-* **Initial Flag:** Test 2 flagged a $9,000,000.00 payment repeating 49 times on a single date ($441,000,000 total exposure).
-* **Data Explanation:** Querying `FUND NAME`, `ACCOUNT NAME`, and `INV NUM` showed transactions assigned to Water/Power Revenue funds matching unique, system-generated institutional treasury reference identifiers. The metadata is consistent with authorized bond principal and interest redemptions executed through a financial trustee. *I did not verify against trustee bond indentures or bank wire confirmations, which published open data does not contain.*
+### Case Study 2: Wells Fargo — municipal debt service
+
+* **Flagged:** $9,000,000.00 appearing 49 times on 05/01/2026, totalling $441,000,000.
+* **Resolved:** 49 rows carrying **49 distinct transaction IDs** — genuinely separate payments, and the only one of the three cases that survived the payment-level correction unchanged. `FUND NAME`, `ACCOUNT NAME` and `INV NUM` assign them to Water and Power Revenue funds against distinct institutional treasury references. The metadata is consistent with authorized bond principal and interest redemptions through a trustee.
+* *Not verified against trustee indentures or wire confirmations, which published data does not contain.*
 
 ![Wells Fargo Evidence](./assets/04_drilldown_wellsfargo.png)
 
-### Case Study 3: United Site Services Contract Analysis
-* **Initial Flag:** Test 3 flagged 15 transactions of $4,960.00 on a single date ($74,400 total exposure).
-* **Data Explanation:** Querying `PO NUM` and `DETAILED ITEM DESCRIPTION` revealed a shared Master Contract Purchase Order (`CPO74260000423827`) for Mayoral Special Projects, with distinct line items corresponding to individual weekly route servicing locations. The metadata is consistent with valid contract line-item billings rather than employee P-Card limit evasion. *I did not verify against physical service delivery receipts or formal contract files, which published open data does not contain.*
+### Case Study 3: United Site Services — one invoice, fifteen locations
+
+* **Flagged:** $4,960.00 appearing 15 times on 10/30/2025, totalling $74,400 — flagged by the sub-threshold structuring test.
+* **Resolved:** all 15 rows share **a single transaction ID**. This is one payment of $74,400 distributed across 15 service locations under Master Contract Purchase Order `CPO74260000423827`, not fifteen payments engineered below a $5,000 threshold. The vendor's invoices split consistently: other payments to the same vendor appear as six lines each.
+* *Not verified against service delivery receipts or the contract file, which published data does not contain.*
 
 ![United Site Services Evidence](./assets/04_drilldown_results.png)
 
@@ -205,69 +237,74 @@ In addition to date reformatting, the query was refactored to pre-filter the sub
 
 ## Summary of Analytical Findings
 
-| Vendor Name | Flagged Condition | Total Exposure | Metadata Analysis & Resolution |
-| :--- | :--- | :--- | :--- |
-| **Wells Fargo Bank** | 49 Same-Day $9M Transactions | $441,000,000.00 | **Explained by data:** Metadata is consistent with authorized municipal debt service and revenue bond redemptions. |
-| **United Site Services** | 15 Same-Day $4.9k Transactions | $74,400.00 | **Explained by data:** Metadata is consistent with line-item route servicing under a master Contract Purchase Order (CPO). |
-| **Konica Minolta** | 693 Duplicate $6.72 Entries | $4,656.96 | **Explained by data:** Metadata is consistent with automated ERP cost allocation routines across city departments. |
+| Vendor | Flagged as | Rows | Distinct payments | Exposure | Resolution |
+| :--- | :--- | ---: | ---: | ---: | :--- |
+| **Wells Fargo Bank** | 49 same-day $9M transactions | 49 | **49** | $441,000,000.00 | **Explained by data:** metadata consistent with authorized debt service and bond redemptions. Genuinely separate payments. |
+| **United Site Services** | 15 same-day $4,960 transactions | 15 | **1** | $74,400.00 | **Artefact of line-level counting:** a single payment across 15 service locations under a master CPO. |
+| **Konica Minolta** | 693 duplicate $6.72 entries | 693 | **11** | $4,656.96 | **Artefact of line-level counting:** 11 invoices allocated across departmental budget lines. |
+
+Two of the three largest exceptions dissolved once payments were counted instead of lines. The third, and by far the largest in dollar terms, did not.
 
 ---
-## 6. INTERACTIVE DRILL-DOWN PANEL PREVIEW
 
-To bridge the gap between automated backend logic and practical management oversight, I designed and executed a lightweight, browser-based data application using the Streamlit Python framework. 
+## Interactive Exception Review Interface
 
-This engine connects directly to the local 747,363-row SQLite database (`ap_data.db`) to enable non-technical auditors to search vendor lines, cross-reference account metadata, and clear false-positive exception groups in seconds.
+A Streamlit application connecting to the local SQLite database (`ap_data.db`). It allows a reviewer to search vendor lines and cross-reference account, fund and invoice metadata without writing SQL. All displayed measures are computed from the database at page load.
 
 ### Handling schema drift and date parsing
 
-Two problems surfaced during local deployment, both common in raw municipal open data.
+Two problems surfaced during local deployment, both common in raw open data.
 
-**Schema drift.** The import tool altered the casing of the table and column names and left trailing spaces in some headers (`"VENDOR NAME "` rather than `"VENDOR NAME"`), so hard-coded column references failed with `no such table: Checkbook_LA`.
+**Schema drift.** The import altered the casing of table and column names and left trailing spaces in some headers (`"VENDOR NAME "` rather than `"VENDOR NAME"`), so hard-coded references failed. The app runs `PRAGMA table_info` at startup and matches column names case- and whitespace-insensitively.
 
-**Silent NULL date arithmetic.** The dataset stores dates as US-format text (`MM/DD/YYYY`). SQLite's `JULIANDAY()` requires ISO format, so every date comparison evaluated to NULL and the rolling-window query returned zero rows — without raising an error.
+**Date parsing.** Dates are reconstructed into ISO format with `SUBSTR` inside a CTE at query time, for the reason described above.
 
-The fix for both, without altering the source data:
-
-* The app runs `PRAGMA table_info` at startup to read the actual schema, and matches column names case- and whitespace-insensitively rather than hard-coding them.
-* Dates are reconstructed into ISO format with `SUBSTR` inside a CTE at query time.
-
-### Dashboard Verification Screenshot
-
-The screenshot below validates the running local deployment interface on my machine. When querying the keyword string `UNITED SITE`, the system maps the schema variables instantly, runs memory-cached evaluations, and prints the matching transaction lines, invoice references, and council fund groupings with zero processing delay.
-
-![Interactive Data Analytics Dashboard](./assets/dashboard_overview.png)
+![Exception Review Interface](./assets/dashboard_overview.png)
 
 ---
 
 ## What This Open Dataset Cannot Show
 
-When conducting data analytics on open-government datasets, conclusions are limited by available fields. This dataset **does not** contain:
-1. **Approval Workflows:** No supervisor sign-off timestamps, secondary approval logs, or delegated authority thresholds.
-2. **Source Documents:** No scanned physical invoices, bill-of-lading receipts, or cancelled check images.
-3. **Contract Files:** No formal legal contract language, bidding specifications, or amendment histories.
-4. **Accounting Timestamps:** No distinction between the transaction posting date and the actual payment/wire execution date.
+1. **Approval workflows** — no sign-off timestamps, secondary approval logs, or delegated authority thresholds.
+2. **Source documents** — no invoices, receipts, or cancelled check images.
+3. **Contract files** — no contract language, bidding specifications, or amendment histories.
+4. **Accounting timestamps** — no distinction between posting date and payment execution date.
+5. **Applicable thresholds** — the approval and competitive-bidding limits in force, and the rules for aggregating related purchases.
+
+Any conclusion about whether a control failed would require all five.
 
 ---
 
-## How to Execute Analytics Locally
+## How to Execute Locally
 
 ### Prerequisites
-* SQLite3 installed locally or a visual editor such as **DB Browser for SQLite**.
-* City of Los Angeles Checkbook dataset loaded into SQLite as table `Checkbook_LA`.
+* SQLite3, or a visual editor such as **DB Browser for SQLite**.
+* The City of Los Angeles Checkbook dataset loaded as table `Checkbook_LA` inside `ap_data.db`.
 
-### Execution
-Execute the SQL scripts in numerical order:
+### SQL exception tests
 ```bash
-sqlite3 Checkbook_LA.db < 01_duplicate_payment_test.sql
-sqlite3 Checkbook_LA.db < 02_high_value_anomaly_test.sql
-sqlite3 Checkbook_LA.db < 03_sub_materiality_structuring_test.sql
-sqlite3 Checkbook_LA.db < 04_substantive_drill_down.sql
+sqlite3 ap_data.db < 01_duplicate_payment_test.sql
+sqlite3 ap_data.db < 02_high_value_anomaly_test.sql
+sqlite3 ap_data.db < 03_sub_materiality_structuring_test.sql
+sqlite3 ap_data.db < 03b_rolling_window_structuring.sql
+sqlite3 ap_data.db < 04_substantive_drill_down.sql
 ```
+
+### Review interface
+Requires Python 3.9 or later:
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+The database and raw CSV are excluded by `.gitignore` because of their size. Download the source data from the City's open data portal and load it locally first.
 
 ---
 
-## Key Takeaways for Public Sector Data Analytics
+## Key Takeaways
 
-1. **Full-Population Screening:** Using reproducible SQL exception scripts enables 100% population screening across municipal spend, replacing restrictive manual sampling.
-2. **Metadata Context Prevents False Alarms:** Automated exceptions highlight statistical patterns, not proof of non-compliance or fraud. Understanding fund accounting and master contract structures is required before drawing operational conclusions.
-3. **Transparent Boundaries:** Acknowledging data limitations and testing constraints is fundamental to delivering objective, reliable analytics in public finance.
+1. **Establish the unit of analysis before writing the test.** A duplicate-payment test that counts accounting lines reports the publisher's file structure as a control weakness. Correcting this removed 68% of the exceptions.
+2. **Silent failures are the real risk.** A query returning zero rows because of a type mismatch is indistinguishable from a clean result. Both failures recorded here raised no error.
+3. **Reconcile every published figure to a re-run query.** The unit-of-analysis error was found by tracing a number in a draft of this document back to the database and getting a different answer.
+4. **Exceptions are screening output, not findings.** 63,853 payments is a filter. 1,680 is a workload. Neither is evidence of anything until the metadata is examined.
+5. **State the boundaries.** Every drill-down here records what was not verified, and why the published data could not verify it.
