@@ -30,12 +30,14 @@ la-city-expenditure-audit/
 │   ├── 01_duplicate_results.png       # Screenshot: Baseline duplicate payment query output
 │   ├── 02_high_value_results.png      # Screenshot: Materiality threshold query output
 │   ├── 03_structuring_results.png     # Screenshot: Sub-materiality split purchase query output
+│   ├── 03b_rolling_window_results.png # Screenshot: 7-day rolling window query output
 │   ├── 04_drilldown_konica.png        # Screenshot: Konica Minolta cost allocation metadata
 │   ├── 04_drilldown_wellsfargo.png    # Screenshot: Wells Fargo debt service tranche metadata
 │   └── 04_drilldown_results.png       # Screenshot: United Site Services CPO metadata
 ├── 01_duplicate_payment_test.sql      # Schema setup & exact duplicate exception scanner
 ├── 02_high_value_anomaly_test.sql     # Materiality filter ($10k+ duplicate exposure)
 ├── 03_sub_materiality_structuring_test.sql # Anti-structuring split purchase scanner ($4.8k–$5k)
+├── 03b_rolling_window_structuring.sql      # 7-day rolling window anti-structuring scanner
 ├── 04_substantive_drill_down.sql      # Root-cause metadata drill-downs
 ├── .gitignore                         # Excludes local SQLite database binaries (>100MB)
 └── README.md                          # Project documentation & analytical findings
@@ -117,6 +119,43 @@ ORDER BY payment_count DESC;
 ![Test 3 Query Results](./assets/03_structuring_results.png)
 
 ---
+
+### Test 3b: Multi-Day Rolling Window Anti-Structuring Scanner (`03b_rolling_window_structuring.sql`)
+Scanned for sub-materiality vendor payments ($4,800.00 to $4,999.99) occurring within a **7-day rolling window** for the same vendor, converting `MM/DD/YYYY` text strings into standard ISO `YYYY-MM-DD` format to perform SQLite `JULIANDAY` date arithmetic.
+
+```sql
+WITH filtered_transactions AS (
+    SELECT 
+        ROWID AS original_rowid,
+        "VENDOR NAME",
+        "TRANSACTION DATE",
+        "DOLLAR AMOUNT",
+        SUBSTR("TRANSACTION DATE", 7, 4) || '-' || 
+        SUBSTR("TRANSACTION DATE", 1, 2) || '-' || 
+        SUBSTR("TRANSACTION DATE", 4, 2) AS iso_date
+    FROM Checkbook_LA
+    WHERE "VENDOR NAME" IS NOT NULL
+      AND CAST(REPLACE(REPLACE("DOLLAR AMOUNT", '$', ''), ',', '') AS REAL) BETWEEN 4800.00 AND 4999.99
+)
+SELECT 
+    t1."VENDOR NAME",
+    t1."TRANSACTION DATE" AS first_transaction_date,
+    t2."TRANSACTION DATE" AS second_transaction_date,
+    CAST(JULIANDAY(t2.iso_date) - JULIANDAY(t1.iso_date) AS INT) AS days_between,
+    t1."DOLLAR AMOUNT" AS first_amount,
+    t2."DOLLAR AMOUNT" AS second_amount
+FROM filtered_transactions t1
+JOIN filtered_transactions t2 
+    ON t1."VENDOR NAME" = t2."VENDOR NAME"
+    AND t1.original_rowid != t2.original_rowid
+    AND JULIANDAY(t2.iso_date) - JULIANDAY(t1.iso_date) BETWEEN 1 AND 7
+ORDER BY t1."VENDOR NAME", t1.iso_date;
+```
+
+* **Scale & Population Denominator:** Returned **1,172 candidate transactions** across a 7-day rolling window[cite: 1].
+* **Visual Evidence:**
+
+![Test 3b Query Results](./assets/03b_rolling_window_results.png)
 
 ## Substantive Metadata Drill-Downs
 
