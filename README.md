@@ -100,7 +100,7 @@ ORDER BY distinct_payments DESC;
 * **Result:** 18,973 exception groups covering **63,853 distinct payments** — 28.4% of the 224,851 payments in the population.
 * **Interpretation:** At this scale the test is a screening filter, not a finding. Recurring obligations of identical value — rent, licences, per-unit service charges — are expected to repeat.
 
-![Test 1 Query Results](./assets/01_duplicate_results.png)
+![Test 1 Query Results](./assets/01_duplicate_payment_test.png)
 
 ---
 
