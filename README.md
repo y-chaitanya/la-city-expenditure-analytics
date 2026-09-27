@@ -152,10 +152,33 @@ JOIN filtered_transactions t2
 ORDER BY t1."VENDOR NAME", t1.iso_date;
 ```
 
-* **Scale & Population Denominator:** Returned **1,172 candidate transactions** across a 7-day rolling window[cite: 1].
+* **Scale & Population Denominator:** Returned **1,172 candidate transactions** across a 7-day rolling window.
 * **Visual Evidence:**
 
 ![Test 3b Query Results](./assets/03b_rolling_window_results.png)
+
+## Technical Note: Date Formatting Bug & Query Optimization
+
+### Problem Statement
+Initial execution of the 7-day rolling window query returned **0 rows** despite taking 5,254 ms to run. Analysis revealed that SQLite's built-in `JULIANDAY()` function strictly requires standard ISO dates (`YYYY-MM-DD`). 
+
+The open source `Checkbook_LA` dataset stores transaction dates as US-formatted text strings (`MM/DD/YYYY`, e.g., `10/28/2025`). Because `JULIANDAY('10/28/2025')` returns `NULL`, all date math comparisons (`NULL - NULL`) silently evaluated to `NULL`, returning zero records across the 747,363-row population.
+
+### Root-Cause Fix & String Formatting
+To resolve this without altering the underlying database schema, string parsing (`SUBSTR`) was introduced inside a Common Table Expression (CTE) to dynamically reconstruct the date string into standard ISO format:
+
+```sql
+-- Reconstructing MM/DD/YYYY string into YYYY-MM-DD
+SUBSTR("TRANSACTION DATE", 7, 4) || '-' || 
+SUBSTR("TRANSACTION DATE", 1, 2) || '-' || 
+SUBSTR("TRANSACTION DATE", 4, 2) AS iso_date
+```
+### Execution Optimization
+
+In addition to date reformatting, the query was refactored to pre-filter the sub-materiality range ($4,800.00 to $4,999.99) inside the Common Table Expression (CTE) prior to performing the self-join:
+
+* **Before Optimization:** Unfiltered self-join evaluated 747k × 747k row permutations before filtering dates/amounts → 0 rows returned (5,254 ms).
+* **After Optimization:** Pre-filtered target population reduced input size down to relevant sub-materiality records before joining → **1,172 valid exception clusters identified**.
 
 ## Substantive Metadata Drill-Downs
 
