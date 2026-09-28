@@ -13,7 +13,7 @@ The most consequential results were not exceptions. They were two defects found 
 
 ### Principal Conclusion
 
-**The dataset contains 747,363 accounting lines representing 224,851 distinct payments — an average of 3.32 lines per payment. Counting at the payment level and excluding redacted payees and zero-dollar entries, the exception tests returned 14,828 duplicate-payment groups, 611 high-value groups at or above $10,000, 96 same-day sub-threshold clusters, and 566 threshold-adjacent payment pairs inside a seven-day window. The largest exceptions by dollar exposure were examined against fund, account, purchase order and invoice metadata. Two proved to be single payments distributed across many accounting lines; the largest proved to be genuinely separate payments, explained by the fund and invoice metadata as institutional debt service. No control weakness, overpayment, or non-compliance is asserted by this analysis.**
+**The dataset contains 747,363 accounting lines representing 224,851 distinct payments — an average of 3.32 lines per payment. Counting at the payment level and excluding redacted payees and zero-dollar entries, the exception tests returned 14,828 duplicate-payment groups, 611 high-value groups at or above $10,000, 96 same-day sub-threshold clusters, and 566 threshold-adjacent payment pairs inside a seven-day window. Two exceptions were then examined against department, fund, account and invoice metadata: the largest by count dissolved into 11 payments published across 693 accounting lines, while the largest by dollar value proved to be 49 genuinely separate payments, explained by the fund and invoice metadata as institutional debt service. No control weakness, overpayment, or non-compliance is asserted by this analysis.**
 
 ---
 
@@ -87,9 +87,10 @@ Effect on Test 1:
 
 ## Dataset Scope & Population Scale
 
-* **Published rows:** 747,363 accounting lines from the *Checkbook LA* open data table.
+* **Published rows:** 747,363 accounting lines from the **Checkbook L.A. Data** table.
 * **Distinct payments:** 224,851, identified by `TRANSACTION ID` — a ratio of 3.32 lines per payment.
-* **Scope:** 100% of the publicly released expenditure records in the dataset. No sampling.
+* **Population:** All records carrying `FISCAL YEAR` 2026 — a single fiscal year, filtered at the source. No sampling.
+* **Transaction dates:** 5 December 2024 to 30 June 2026. Dates precede the fiscal year because `TRANSACTION DATE` records the document date, not the date the payment was booked: 38 lines (14 payments) carry 2024 dates inside a fiscal 2026 extract. This confirms directly that the date field cannot be read as a payment execution date — see limitations below.
 * **Key fields analyzed:** Transaction ID, Vendor Name, Transaction Date, Dollar Amount, Department Name, Fund Name, Account Name, PO Number, Invoice Number, Detailed Item Description.
 
 ---
@@ -242,7 +243,7 @@ ORDER BY a.vendor, a.iso_date;
 
 ---
 
-## Technical Notes: Three Failures Worth Recording
+## Technical Notes: Four Notes on Getting the Numbers Right
 
 ### 1. A query that silently returned nothing
 
@@ -266,7 +267,28 @@ The same error recurred inside an aggregate: `SUM()` over rows in Test 2 inflate
 
 Once payments were counted correctly, the largest remaining groups were `PRIVACY-<DEPARTMENT>` labels rather than vendors. The test was grouping hundreds of unrelated individuals into a single entity. Identifying this required reading the output rather than only the row count.
 
-All three failures share a property: **none produced an error message.** One returned zero rows that looked like a clean result; the others returned inflated counts that looked plausible. Reconciling every reported figure to a re-run query, and reading the top of every result set, is what surfaced them.
+These first three failures share a property: **none produced an error message.** One returned zero rows that looked like a clean result; the others returned inflated counts that looked plausible. Reconciling every reported figure to a re-run query, and reading the top of every result set, is what surfaced them.
+
+### 4. The parts did not add up to the whole
+
+Distinct payments counted by calendar year — 14 in 2024, 111,840 in 2025,
+113,086 in 2026 — total 224,940. The population is 224,851. The parts
+exceed the whole by 89.
+
+This is not an error. `COUNT(DISTINCT "TRANSACTION ID")` counts an ID once
+within each group, so a payment whose accounting lines carry dates in two
+calendar years is counted in both. Queried directly, exactly 89 payments
+carry lines in more than one calendar year — matching the arithmetic gap,
+which also establishes that each spans exactly two years rather than three.
+
+The substantive point is that `TRANSACTION DATE` is a line-level attribute:
+one payment can carry more than one date. Test 1 groups on vendor, date and
+amount, so a straddling payment is split across groups. Because the test
+flags only where two or more distinct transaction IDs share a group, this
+cannot create a false positive; at worst it suppresses one. 89 of 224,851
+is 0.04% of the population.
+
+Found by adding up a column and noticing the total did not match.
 
 ---
 
@@ -338,7 +360,9 @@ Any conclusion about whether a control failed would require all six.
 
 ### Prerequisites
 * SQLite3, or a visual editor such as **DB Browser for SQLite**.
-* The City of Los Angeles Checkbook dataset loaded as table `Checkbook_LA` inside `ap_data.db`.
+* The **Checkbook L.A. Data** dataset, published by the Office of the Controller
+  and downloaded from [controllerdata.lacity.org](https://controllerdata.lacity.org/Purchasing/Checkbook-L-A-Data/pggv-e4fn/data_preview),
+  loaded as table `Checkbook_LA` inside `ap_data.db`.
 
 ### SQL exception tests
 ```bash
@@ -356,7 +380,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The database and raw CSV are excluded by `.gitignore` because of their size. Download the source data from the City's open data portal and load it locally first.
+The database and raw CSV are excluded by `.gitignore` because of their size.
 
 ---
 
@@ -365,6 +389,25 @@ The database and raw CSV are excluded by `.gitignore` because of their size. Dow
 1. **Establish the unit of analysis before writing the test.** A duplicate-payment test that counts accounting lines reports the publisher's file structure as a control weakness. Correcting this removed 68% of the exceptions.
 2. **Fixing the test is not the same as fixing the summary.** The row-counting error survived in a `SUM()` column after the `HAVING` clause had been corrected.
 3. **Read the output, not only the row count.** The redacted-payee defect was invisible in the count and obvious in the first four rows.
-4. **Silent failures are the real risk.** A query returning zero rows because of a type mismatch is indistinguishable from a clean result. None of the three failures recorded here raised an error.
+4. **Silent failures are the real risk.** A query returning zero rows because of a type mismatch is indistinguishable from a clean result. None of the failures recorded here raised an error.
 5. **Exceptions are screening output, not findings.** 44,014 payments is a filter. 611 groups is a workload. Neither is evidence of anything until the metadata is examined.
 6. **State the boundaries.** Every drill-down here records what was not verified, and why the published data could not verify it.
+
+---
+
+## About This Project
+
+Built by **Chaitanya Yarlagadda, EA** — IRS Enrolled Agent, CPA candidate,
+B.Tech in Computer Science — as independent preparation for performance
+audit work.
+
+The intent was not to find something wrong in the City's payments. It was
+to learn what exception testing can and cannot establish from published
+data, and to practise the discipline of reconciling every stated figure
+back to the query that produced it. Two methodology errors surfaced that
+way, and both are documented above rather than quietly corrected.
+
+Data published by the Office of the Controller, City of Los Angeles.
+Independent work, not affiliated with or reviewed by the City.
+
+github.com/y-chaitanya
